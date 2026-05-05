@@ -106,8 +106,13 @@ function markdownToHtml(markdown) {
 async function writeReport(options = {}) {
     const workspaceDir = options.workspaceDir;
     const markdown = options.markdown;
+    const logger = options.logger;
     const markdownPath = path.join(workspaceDir, "report.md");
     const htmlPath = path.join(workspaceDir, "report.html");
+
+    if (logger) {
+        logger.info("Escribiendo artefactos del reporte", { htmlPath, markdownPath });
+    }
 
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(markdownPath, markdown, "utf8");

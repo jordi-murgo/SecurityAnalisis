@@ -15,7 +15,10 @@ function createValidationError(message) {
     return error;
 }
 
-function validateSkillResult(skillResult) {
+function validateSkillResult(skillResult, logger) {
+    if (logger) {
+        logger.debug("Validando resultado del skill");
+    }
     if (!skillResult || typeof skillResult !== "object") {
         throw createValidationError("El skill debe devolver un objeto");
     }
@@ -24,16 +27,15 @@ function validateSkillResult(skillResult) {
         throw createValidationError("El skill no devolvió rawReport válido");
     }
 
-    if (typeof skillResult.summary !== "string" || skillResult.summary.trim().length === 0) {
-        throw createValidationError("El skill no devolvió summary válido");
-    }
-
     if (!skillResult.metadata || typeof skillResult.metadata !== "object") {
         throw createValidationError("El skill no devolvió metadata válida");
     }
 }
 
-function validateReport(markdown) {
+function validateReport(markdown, logger) {
+    if (logger) {
+        logger.debug("Validando reporte final");
+    }
     if (typeof markdown !== "string") {
         throw createValidationError("El reporte final debe ser un string Markdown");
     }

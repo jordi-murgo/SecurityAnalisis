@@ -34,6 +34,11 @@ async function acquireRepo(options = {}) {
     const outputDir = options.outputDir;
     const force = Boolean(options.force);
     const commandRunner = options.commandRunner || defaultCommandRunner;
+    const logger = options.logger;
+
+    if (logger) {
+        logger.info("Preparando adquisición de repositorio", { force, outputDir, ownerRepo });
+    }
 
     if (!isValidOwnerRepo(ownerRepo)) {
         const error = new Error("owner/repo inválido");
@@ -48,19 +53,35 @@ async function acquireRepo(options = {}) {
 
     if (fs.existsSync(workspaceDir)) {
         if (!force) {
+            if (logger) {
+                logger.info("Reutilizando workspace existente", { workspaceDir });
+            }
             return { repoName, reused: true, workspaceDir };
         }
 
+        if (logger) {
+            logger.warn("Eliminando workspace existente por --force", { workspaceDir });
+        }
         fs.rmSync(workspaceDir, { force: true, recursive: true });
     }
 
     try {
+        if (logger) {
+            logger.info("Clonando repositorio con gh", { ownerRepo, workspaceDir });
+        }
         commandRunner("gh", ["repo", "clone", ownerRepo, workspaceDir], { cwd: outputDir, stdio: "pipe" });
     } catch (error) {
+        if (logger) {
+            logger.error("Fallo durante gh repo clone", { message: error.message });
+        }
         const cloneError = new Error("Error: gh clone failed. Ensure GitHub CLI is installed and authenticated.");
         cloneError.exitCode = 3;
         cloneError.cause = error;
         throw cloneError;
+    }
+
+    if (logger) {
+        logger.info("Repositorio clonado correctamente", { workspaceDir });
     }
 
     return { repoName, reused: false, workspaceDir };

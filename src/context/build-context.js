@@ -44,6 +44,17 @@ const EXTENSION_TO_LANGUAGE = {
     ".tsx": "JavaScript/TypeScript"
 };
 
+const QUICK_NOISE_PATTERNS = [
+    /^\.agent\/cybersecurity\/references\//,
+    /^\.agent\/skills\//,
+    /^tests\/fixtures\//,
+    /^workspace[^/]*\//
+];
+
+function isQuickNoisePath(filePath) {
+    return QUICK_NOISE_PATTERNS.some((pattern) => pattern.test(filePath));
+}
+
 function defaultCommandRunner(command, args, options = {}) {
     const result = spawnSync(command, args, {
         cwd: options.cwd,
@@ -104,28 +115,71 @@ function detectLanguages(files, manifests) {
     return Array.from(languages);
 }
 
+function detectIacTypes(files) {
+    const iacTypes = new Set();
+
+    for (const filePath of files) {
+        const normalizedPath = filePath.replace(/\\/g, "/");
+        const lowerPath = normalizedPath.toLowerCase();
+        const extension = path.extname(lowerPath);
+        const baseName = path.basename(lowerPath);
+
+        if (extension === ".tf" || extension === ".tfvars") {
+            iacTypes.add("terraform");
+        }
+
+        if ([".yaml", ".yml"].includes(extension) && /(kubernetes|k8s|helm|manifests)/.test(lowerPath)) {
+            iacTypes.add("kubernetes");
+        }
+
+        if (baseName === "dockerfile" || baseName === "docker-compose.yml") {
+            iacTypes.add("docker");
+        }
+
+        if ([".cloudformation.yaml", ".cloudformation.json"].some((suffix) => lowerPath.endsWith(suffix)) || baseName === "template.yaml") {
+            iacTypes.add("cloudformation");
+        }
+
+        if (baseName === "serverless.yml" || baseName === "serverless.yaml") {
+            iacTypes.add("serverless");
+        }
+    }
+
+    return Array.from(iacTypes).sort();
+}
+
 function prioritizeFiles(files) {
-    const ranked = files.map((filePath) => {
-        let score = 0;
+    const ranked = files
+        .filter((filePath) => !isQuickNoisePath(filePath))
+        .map((filePath) => {
+            let score = 0;
 
-        if (/^(package\.json|pyproject\.toml|requirements\.txt|go\.mod|Cargo\.toml|Dockerfile)$/i.test(filePath)) {
-            score += 100;
-        }
+            if (/^(package\.json|pyproject\.toml|requirements\.txt|go\.mod|Cargo\.toml|Dockerfile)$/i.test(filePath)) {
+                score += 100;
+            }
 
-        if (/(^|\/)(src|app|server|api|routes|controllers)\//i.test(filePath)) {
-            score += 50;
-        }
+            if (/(^|\/)(src|app|lib|bin|server|api|routes|controllers)\//i.test(filePath)) {
+                score += 50;
+            }
 
-        if (/(index|main|server|app|auth|login|config)\./i.test(filePath)) {
-            score += 25;
-        }
+            if (/(index|main|server|app|auth|login|config)\./i.test(filePath)) {
+                score += 25;
+            }
 
-        if (/^\.github\/workflows\//.test(filePath)) {
-            score += 20;
-        }
+            if (/^\.github\/workflows\//.test(filePath)) {
+                score += 20;
+            }
 
-        return { filePath, score };
-    });
+            if (/^(README\.md|docs\/)/i.test(filePath)) {
+                score -= 25;
+            }
+
+            if (/^tests\//.test(filePath) && !/^tests\/fixtures\//.test(filePath)) {
+                score += 5;
+            }
+
+            return { filePath, score };
+        });
 
     return ranked
         .sort((left, right) => right.score - left.score || left.filePath.localeCompare(right.filePath))
@@ -172,29 +226,56 @@ async function buildContext(options = {}) {
     const scope = options.scope;
     const workspaceDir = options.workspaceDir;
     const commandRunner = options.commandRunner || defaultCommandRunner;
+    const logger = options.logger;
+
+    if (logger) {
+        logger.info("Construyendo project context", { repo, scope, workspaceDir });
+    }
 
     const allFiles = walkFiles(workspaceDir);
-    const manifests = allFiles.filter((filePath) => Object.prototype.hasOwnProperty.call(MANIFEST_TO_LANGUAGE, path.basename(filePath)));
+    const manifests = allFiles.filter((filePath) => {
+        return Object.prototype.hasOwnProperty.call(MANIFEST_TO_LANGUAGE, path.basename(filePath)) && !isQuickNoisePath(filePath);
+    });
     const topFiles = prioritizeFiles(allFiles);
     const changedFiles = scope === "diff" ? getChangedFiles(workspaceDir, commandRunner) : [];
     const filesInScope = scope === "diff"
         ? (changedFiles.length > 0 ? changedFiles : topFiles)
         : (scope === "quick" ? topFiles : allFiles);
 
-    return {
+    const context = {
         changedFiles,
         detectedLanguages: detectLanguages(allFiles, manifests),
         files: filesInScope,
         git: getGitInfo(workspaceDir, commandRunner),
+        iacTypes: detectIacTypes(allFiles),
         manifests,
         repo,
+        repoMetrics: {
+            totalFiles: allFiles.length
+        },
         scope,
         topFiles,
         workspaceDir
     };
+
+    if (logger) {
+        logger.info("Project context construido", {
+            changedFiles: context.changedFiles.length,
+            filesInScope: context.files.length,
+            iacTypes: context.iacTypes,
+            manifests: context.manifests,
+            totalFiles: context.repoMetrics.totalFiles,
+            topFiles: context.topFiles.slice(0, 10)
+        });
+    }
+
+    return context;
 }
 
 module.exports = {
     buildContext,
-    defaultCommandRunner
+    detectIacTypes,
+    defaultCommandRunner,
+    isQuickNoisePath,
+    prioritizeFiles
 };

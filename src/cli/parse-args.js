@@ -15,16 +15,24 @@ const USAGE = [
     "  --help, -h  show help"
 ].join("\n");
 
-function parseArgs(argv) {
+function parseArgs(argv, logger) {
     const tokens = Array.isArray(argv) ? argv.slice(2) : [];
     const flags = {};
     let ownerRepo = null;
+
+    if (logger) {
+        logger.debug("Parseando argumentos CLI", { tokens });
+    }
 
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
 
         if (token === "--help" || token === "-h") {
-            return { help: true, flags };
+            const result = { help: true, flags };
+            if (logger) {
+                logger.info("Flag de ayuda detectada");
+            }
+            return result;
         }
 
         if (!token.startsWith("--")) {
@@ -72,7 +80,11 @@ function parseArgs(argv) {
         return { error: `Unknown flag: ${token}` };
     }
 
-    return { ownerRepo, flags, help: false };
+    const parsed = { ownerRepo, flags, help: false };
+    if (logger) {
+        logger.info("Argumentos parseados", parsed);
+    }
+    return parsed;
 }
 
 function formatUsage() {

@@ -2,6 +2,8 @@
 
 const fs = require("fs");
 
+const { createLogger } = require("../log/create-logger");
+
 const { formatUsage, isValidScope, parseArgs } = require("./parse-args");
 const { resolveConfig } = require("../config/resolve-config");
 const { acquireRepo, isValidOwnerRepo } = require("../repo/acquire-repo");
@@ -32,8 +34,15 @@ async function runCli(argv, options = {}) {
     const env = options.env || process.env;
     const cwd = options.cwd || process.cwd();
     const services = options.services || {};
+    const logger = options.logger || createLogger({
+        level: env.CC_LOG_LEVEL || "info",
+        scope: "cli",
+        stream: stderr
+    });
 
-    const parsed = parseArgs(argv);
+    logger.info("Iniciando ejecución del CLI", { cwd });
+
+    const parsed = parseArgs(argv, logger.child("args"));
 
     if (parsed.help) {
         writeLine(stdout, formatUsage());
@@ -49,7 +58,8 @@ async function runCli(argv, options = {}) {
     const config = (services.resolveConfig || resolveConfig)({
         cwd,
         env,
-        flags: parsed.flags
+        flags: parsed.flags,
+        logger: logger.child("config")
     });
 
     if (!parsed.ownerRepo || !isValidOwnerRepo(parsed.ownerRepo)) {
@@ -72,6 +82,7 @@ async function runCli(argv, options = {}) {
     try {
         repoState = await (services.acquireRepo || acquireRepo)({
             force: config.force,
+            logger: logger.child("repo"),
             outputDir: config.workspaceDir,
             ownerRepo: parsed.ownerRepo
         });
@@ -83,6 +94,7 @@ async function runCli(argv, options = {}) {
     }
 
     const projectContext = await (services.buildContext || buildContext)({
+        logger: logger.child("context"),
         repo: parsed.ownerRepo,
         scope: config.scope,
         workspaceDir: repoState.workspaceDir
@@ -91,10 +103,13 @@ async function runCli(argv, options = {}) {
     let skillResult;
     try {
         skillResult = await (services.runCybersecuritySkill || runCybersecuritySkill)(projectContext, {
+            llmBaseUrl: config.llmBaseUrl,
+            llmClient: services.llmClient,
+            logger: logger.child("skill"),
             model: config.model,
             provider: config.provider
         });
-        validateSkillResult(skillResult);
+        validateSkillResult(skillResult, logger.child("validate-skill"));
     } catch (error) {
         if (error && Number.isInteger(error.exitCode)) {
             throw error;
@@ -103,15 +118,19 @@ async function runCli(argv, options = {}) {
     }
 
     const normalizedReport = (services.normalizeReport || normalizeReport)({
+        logger: logger.child("report-normalize"),
         projectContext,
         skillResult
     });
-    validateReport(normalizedReport.markdown);
+    validateReport(normalizedReport.markdown, logger.child("report-validate"));
 
     const written = await (services.writeReport || writeReport)({
+        logger: logger.child("report-write"),
         markdown: normalizedReport.markdown,
         workspaceDir: repoState.workspaceDir
     });
+
+    logger.info("CLI finalizado correctamente", { htmlPath: written.htmlPath, markdownPath: written.markdownPath });
 
     writeLine(stdout, written.markdownPath);
     writeLine(stdout, written.htmlPath);
