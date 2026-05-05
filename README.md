@@ -2,7 +2,7 @@
 
 Presentación mínima del proyecto.
 
-`SecurityAnalisis` es un CLI para auditar repositorios con ayuda del skill `cybersecurity` definido en `.agent/cybersecurity/SKILL.md`.
+`SecurityAnalisis` es un CLI para auditar repositorios con ayuda del skill `cybersecurity` definido en `.agent/skills/cybersecurity/SKILL.md`.
 
 ## Estado actual
 
@@ -31,7 +31,7 @@ cybersecurity owner/repo --scope diff --model deepseek-r1:8b --provider ollama
 - `docs/SPEC.md` — contrato funcional del MVP.
 - `docs/ARCHITECTURE.md` — componentes y flujo técnico.
 - `docs/adr/` — decisiones cerradas del proyecto.
-- `.agent/cybersecurity/SKILL.md` — contrato del motor de análisis.
+- `.agent/skills/cybersecurity/SKILL.md` — contrato del motor de análisis.
 
 ## Regla operativa
 

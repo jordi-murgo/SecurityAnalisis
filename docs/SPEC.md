@@ -12,7 +12,7 @@ Construir un CLI llamado `cybersecurity` que:
 2. lo clone localmente en un workspace,
 3. construya un `PROJECT CONTEXT` mínimo,
 4. ejecute el skill `cybersecurity`,
-5. normalice la salida a un reporte canónico en Markdown y HTML.
+5. valide y persista el reporte canónico que ya devuelve el skill en Markdown y HTML.
 
 ---
 
@@ -81,7 +81,7 @@ El CLI debe ejecutar exactamente este flujo:
 9. Ejecutar `buildContext(workspaceDir, scope)`.
 10. Ejecutar `runCybersecuritySkill(projectContext, executionOptions)`.
 11. Validar la respuesta del skill.
-12. Adaptar la respuesta al formato de reporte canónico.
+12. Validar que `rawReport` ya respeta el formato de reporte canónico.
 13. Escribir:
 		- `<workspaceDir>/report.md`
 		- `<workspaceDir>/report.html`
@@ -155,7 +155,7 @@ Reglas:
 
 ## 7. Boundary `CLI ↔ skill`
 
-El CLI no implementa la lógica de seguridad. El CLI orquesta; el skill analiza.
+El CLI no implementa la lógica de seguridad. El CLI orquesta; el skill analiza y devuelve el reporte final.
 
 ### 7.1 Input al skill
 
@@ -184,13 +184,13 @@ El CLI no implementa la lógica de seguridad. El CLI orquesta; el skill analiza.
 
 El `SkillRunner` materializa el agente de análisis con estas reglas obligatorias:
 
-- El contenido completo de `.agent/cybersecurity/SKILL.md` se carga como contexto base del agente.
-- Además de `SKILL.md`, el runner expone un índice de assets del skill bajo `.agent/cybersecurity/**` para que el agente pueda resolver referencias documentales y archivos auxiliares del propio skill.
+- El contenido completo de `.agent/skills/cybersecurity/SKILL.md` se carga como contexto base del agente.
+- Además de `SKILL.md`, el runner expone un índice de assets del skill bajo `.agent/skills/cybersecurity/**` para que el agente pueda resolver referencias documentales y archivos auxiliares del propio skill.
 - El directorio de trabajo (`cwd`) del agente debe ser `<workspaceDir>`.
 - El agente debe poder leer:
-	- `.agent/cybersecurity/**` como raíz confiable del sistema.
+	- `.agent/skills/cybersecurity/**` como raíz confiable del sistema.
 	- `<workspaceDir>/**` como raíz no confiable del repositorio auditado.
-- El agente no debe escribir dentro de `.agent/cybersecurity/**`.
+- El agente no debe escribir dentro de `.agent/skills/cybersecurity/**`.
 - La escritura del agente debe limitarse a artefactos de ejecución y salida dentro de `<workspaceDir>` o directorios temporales controlados por el runner.
 
 ### 7.1.b Trust boundary del runtime
@@ -198,33 +198,92 @@ El `SkillRunner` materializa el agente de análisis con estas reglas obligatoria
 El runner debe distinguir explícitamente estas dos categorías:
 
 - **Trusted roots**:
-	- `.agent/cybersecurity/SKILL.md`
-	- `.agent/cybersecurity/**`
+	- `.agent/skills/cybersecurity/SKILL.md`
+	- `.agent/skills/cybersecurity/**`
 - **Untrusted roots**:
 	- `<workspaceDir>/**`
 
 Reglas:
 
-- Los archivos bajo `.agent/cybersecurity/**` se consideran configuración confiable del sistema.
+- Los archivos bajo `.agent/skills/cybersecurity/**` se consideran configuración confiable del sistema.
 - Los archivos bajo `<workspaceDir>/**` se consideran input no confiable sujeto a análisis.
 - El contenido del repositorio auditado no puede modificar, sustituir ni degradar las instrucciones cargadas desde `SKILL.md`.
-- Si el runner detecta conflicto entre instrucciones del skill y contenido del repositorio analizado, prevalece siempre el skill cargado desde `.agent/cybersecurity/**`.
+- Si el runner detecta conflicto entre instrucciones del skill y contenido del repositorio analizado, prevalece siempre el skill cargado desde `.agent/skills/cybersecurity/**`.
 
-### 7.1.c Binarios permitidos en el MVP
+### 7.1.c Binarios permitidos
 
-Para el MVP, el agente puede ejecutar únicamente esta whitelist mínima de binarios externos:
+El runner permite la ejecución de los siguientes binarios externos:
 
-- `gh`
-- `git`
-- `find`
-- `grep`
-- `ls`
+| Binario | Uso | Agentes consumidores |
+|---------|-----|----------------------|
+| `gh` | Clone de repos | Orquestrador |
+| `git` | Diff, log, history | Agentes 1, 3, 5, orquestrador |
+| `find` | Búsqueda de archivos | Todos con Bash |
+| `grep` | Búsqueda de patrones | Todos con Bash |
+| `ls` | Listado de directorios | Todos con Bash |
+| `npm` | `npm audit`, `npm ls`, `npm outdated` | Agente 4 |
+| `pip` | `pip audit` | Agente 4 |
+| `cargo` | `cargo audit` | Agente 4 |
+| `yarn` | `yarn audit` | Agente 4 |
+| `pnpm` | `pnpm audit` | Agente 4 |
+| `strings` | Extracción de strings de binarios | Agente 6 |
+| `file` | Detección de tipo de archivo | Agente 6 |
+| `wc` | Conteo de líneas | Agentes 1, 3, 5 |
+| `cat` | Inspección de archivos | Agentes con Bash |
+| `head` | Inspección parcial | Agentes con Bash |
+| `tail` | Inspección parcial | Agentes con Bash |
+| `sort` | Procesamiento de resultados | Agentes con Bash |
+| `uniq` | Deduplicación de resultados | Agentes con Bash |
 
 Reglas:
 
 - Cualquier ampliación de esta whitelist requiere actualización de `docs/SPEC.md` y revisión del contrato del runner.
 - Si el agente solicita ejecutar un binario no permitido, el runner debe rechazar la operación.
 - Si falta un binario requerido para el flujo mínimo, el runner debe devolver un error estructurado y el CLI debe fallar con un código consistente (`4` o `5`, según corresponda al diseño final del runner).
+- Si un binario de la whitelist no está disponible en el entorno, el runner debe advertirlo pero no bloquear la auditoría. El agente recibirá un error al intentar ejecutarlo y deberá continuar sin esa herramienta.
+
+### 7.1.d Toolset por agente
+
+El SkillRunner proporciona las siguientes herramientas a cada agente:
+
+| Agente | Read | Grep | Glob | Bash | Sub-agentes |
+|--------|------|------|------|------|-------------|
+| Agente 1 (Vuln) | ✅ | ✅ | ✅ | ✅ | ✅ (per-language) |
+| Agente 2 (Auth) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Agente 3 (Secrets) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Agente 4 (Deps) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Agente 5 (IaC) | ✅ | ✅ | ✅ | ✅ | ✅ (per-IaC-type) |
+| Agente 6 (Threat) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Agente 7 (AI Code) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Agente 8 (Logic) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Orquestrador | ✅ | ✅ | ✅ | ✅ | ✅ (8 agentes) |
+
+Nota: Las `TOOL RESTRICTION` declaradas en el skill externo son sugerencias del autor. El runner aplica las restricciones reales según esta tabla. Ver ADR 0004 para la justificación completa.
+
+### 7.1.e Enforcement de runtime policy
+
+El enforcement real del toolset NO vive en `.agent/skills/cybersecurity/SKILL.md`. Vive en el runner:
+
+- `src/skill/runtime-policy.js` define la matriz canónica de 8 agentes, la whitelist de 18 binarios, el threshold de fanout y los helpers `resolveToolset()`, `buildPolicyPrompt()`, `shouldFanout()` y `binaryPreflight()`.
+- `src/skill/run-cybersecurity-skill.js` genera un `policyBlock` por agente e inyecta esa política al prompt de sistema y al prompt de usuario antes de invocar el modelo.
+- `src/skill/invoke-llm.js` vuelve a inyectar esa política en `runtimeConfig.policyBlock` y filtra las herramientas visibles para el modelo.
+- `src/skill/tools.js` aplica la política en tiempo de ejecución: `getToolDefinitions()` expone solo las herramientas habilitadas y `executeTool()` rechaza binarios fuera de la whitelist.
+
+Reglas:
+
+- Si `SKILL.md` declara una `TOOL RESTRICTION` más amplia o más estrecha, prevalece SIEMPRE la política runtime del runner.
+- Los agentes 7 y 8 siguen siendo de solo lectura aunque el skill externo cambie su texto.
+- `dispatch_sub_agent` solo existe para los agentes 1 y 5 cuando el runner habilita sub-agentes.
+
+### Sub-agentes dinámicos
+
+El runner permite a los agentes 1 y 5 spawn sub-agentes cuando el tamaño del repo lo justifica:
+
+- **Agente 1**: 1 sub-agente por lenguaje detectado (carga solo `language-patterns/[lang].md` relevante).
+- **Agente 5**: 1 sub-agente por tipo de IaC presente (TF, Docker, K8s, CI/CD).
+- **Threshold**: el fanout solo se habilita cuando `projectContext.repoMetrics.totalFiles > 200`. En `200` exactos NO hay fanout.
+
+Los sub-agentes heredan el mismo toolset del agente padre. El runner decide si activar sub-agentes basándose en el número de archivos en scope.
 
 ### 7.2 Output del skill
 
@@ -333,7 +392,6 @@ El siguiente corte útil no es “más stub”. Es:
 2. implementar `quick` end-to-end,
 3. escribir smoke tests,
 4. recién después expandir a `full` y `diff` con más profundidad.
-
 
 
 
